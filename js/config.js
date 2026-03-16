@@ -77,6 +77,18 @@ const API_SITES = {
         api: 'https://api.wujinapi.me',
         name: '无尽资源',
     },
+    jinying: {
+        api: 'https://jyzyapi.com',
+        name: '金鹰资源',
+    },
+    subo: {
+        api: 'https://subocj.com',
+        name: '速播资源',
+    },
+    ukuzy: {
+        api: 'https://api.ukuapi.com',
+        name: 'U酷资源',
+    },
     wwzy: {
         api: 'https://wwzy.tv',
         name: '旺旺短剧',
