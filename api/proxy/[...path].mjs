@@ -185,6 +185,26 @@ function isM3u8Content(content, contentType) {
     return content && typeof content === 'string' && content.trim().startsWith('#EXTM3U');
 }
 
+function extractM3u8FromHtml(html, pageUrl) {
+    const patterns = [
+        /(?:url|source|video_url|playUrl)\s*[:=]\s*["']([^"']*\.m3u8[^"']*)/i,
+        /(?:url|source|video_url|playUrl)\s*[:=]\s*["'](\/[^"']+)/i,
+    ];
+    for (const pattern of patterns) {
+        const match = html.match(pattern);
+        if (match && match[1]) {
+            const url = match[1];
+            if (/^https?:\/\//.test(url)) return url;
+            try {
+                return new URL(url, pageUrl).toString();
+            } catch {
+                return null;
+            }
+        }
+    }
+    return null;
+}
+
 function processKeyLine(line, baseUrl) {
     return line.replace(/URI="([^"]+)"/, (match, uri) => {
         const absoluteUri = resolveUrl(baseUrl, uri);
@@ -384,8 +404,29 @@ export default async function handler(req, res) {
                 .removeHeader('content-length')   // 长度已改变
                 .send(processedM3u8); // 发送 M3U8 文本
 
+        } else if (contentType && contentType.includes('text/html') && content.includes('<')) {
+            // If HTML, try to extract m3u8 URL from share/player pages
+            const realM3u8Url = extractM3u8FromHtml(content, targetUrl);
+            if (realM3u8Url) {
+                console.info(`从HTML页面提取到m3u8地址: ${realM3u8Url}`);
+                try {
+                    const { content: m3u8Content, contentType: m3u8Type } = await fetchContentWithType(realM3u8Url, {});
+                    if (isM3u8Content(m3u8Content, m3u8Type)) {
+                        const processedM3u8 = await processM3u8Content(realM3u8Url, m3u8Content);
+                        res.status(200)
+                            .setHeader('Content-Type', 'application/vnd.apple.mpegurl;charset=utf-8')
+                            .setHeader('Cache-Control', `public, max-age=${CACHE_TTL}`)
+                            .removeHeader('content-encoding')
+                            .removeHeader('content-length')
+                            .send(processedM3u8);
+                        return;
+                    }
+                } catch (e) {
+                    console.warn('获取提取的m3u8失败:', e.message);
+                }
+            }
+            console.info(`直接返回非 M3U8 内容: ${targetUrl}, 类型: ${contentType}`);
         } else {
-            // --- 如果不是 M3U8，直接返回原始内容 ---
             console.info(`直接返回非 M3U8 内容: ${targetUrl}, 类型: ${contentType}`);
 
             // 设置原始响应头，但排除有问题的头和 CORS 头（已设置）

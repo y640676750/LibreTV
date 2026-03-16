@@ -208,6 +208,27 @@ export async function onRequest(context) {
         }
     }
 
+    // Extract real m3u8 URL from HTML share/player pages
+    function extractM3u8FromHtml(html, pageUrl) {
+        const patterns = [
+            /(?:url|source|video_url|playUrl)\s*[:=]\s*["']([^"']*\.m3u8[^"']*)/i,
+            /(?:url|source|video_url|playUrl)\s*[:=]\s*["'](\/[^"']+)/i,
+        ];
+        for (const pattern of patterns) {
+            const match = html.match(pattern);
+            if (match && match[1]) {
+                const url = match[1];
+                if (/^https?:\/\//.test(url)) return url;
+                try {
+                    return new URL(url, pageUrl).toString();
+                } catch {
+                    return null;
+                }
+            }
+        }
+        return null;
+    }
+
     // 判断是否是 M3U8 内容
     function isM3u8Content(content, contentType) {
         // 检查 Content-Type
@@ -487,16 +508,32 @@ export async function onRequest(context) {
             logDebug(`内容是 M3U8，开始处理: ${targetUrl}`);
             const processedM3u8 = await processM3u8Content(targetUrl, content, 0, env);
             return createM3u8Response(processedM3u8);
-        } else {
-            logDebug(`内容不是 M3U8 (类型: ${contentType})，直接返回: ${targetUrl}`);
-            const finalHeaders = new Headers(responseHeaders);
-            finalHeaders.set('Cache-Control', `public, max-age=${CACHE_TTL}`);
-            // 添加 CORS 头，确保非 M3U8 内容也能跨域访问（例如图片、字幕文件等）
-            finalHeaders.set("Access-Control-Allow-Origin", "*");
-            finalHeaders.set("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS");
-            finalHeaders.set("Access-Control-Allow-Headers", "*");
-            return createResponse(content, 200, finalHeaders);
         }
+
+        // If response is HTML, try to extract m3u8 URL from share/player pages
+        if (contentType && contentType.includes('text/html') && content.includes('<')) {
+            const realM3u8Url = extractM3u8FromHtml(content, targetUrl);
+            if (realM3u8Url) {
+                logDebug(`从HTML页面提取到m3u8地址: ${realM3u8Url}`);
+                try {
+                    const { content: m3u8Content, contentType: m3u8Type } = await fetchContentWithType(realM3u8Url);
+                    if (isM3u8Content(m3u8Content, m3u8Type)) {
+                        const processedM3u8 = await processM3u8Content(realM3u8Url, m3u8Content, 0, env);
+                        return createM3u8Response(processedM3u8);
+                    }
+                } catch (e) {
+                    logDebug(`获取提取的m3u8失败: ${e.message}`);
+                }
+            }
+        }
+
+        logDebug(`内容不是 M3U8 (类型: ${contentType})，直接返回: ${targetUrl}`);
+        const finalHeaders = new Headers(responseHeaders);
+        finalHeaders.set('Cache-Control', `public, max-age=${CACHE_TTL}`);
+        finalHeaders.set("Access-Control-Allow-Origin", "*");
+        finalHeaders.set("Access-Control-Allow-Methods", "GET, HEAD, POST, OPTIONS");
+        finalHeaders.set("Access-Control-Allow-Headers", "*");
+        return createResponse(content, 200, finalHeaders);
 
     } catch (error) {
         logDebug(`处理代理请求时发生严重错误: ${error.message} \n ${error.stack}`);

@@ -118,6 +118,22 @@ function isM3u8Content(content, contentType) {
     return content && typeof content === 'string' && content.trim().startsWith('#EXTM3U');
 }
 
+function extractM3u8FromHtml(html, pageUrl) {
+    const patterns = [
+        /(?:url|source|video_url|playUrl)\s*[:=]\s*["']([^"']*\.m3u8[^"']*)/i,
+        /(?:url|source|video_url|playUrl)\s*[:=]\s*["'](\/[^"']+)/i,
+    ];
+    for (const pattern of patterns) {
+        const match = html.match(pattern);
+        if (match && match[1]) {
+            const url = match[1];
+            if (/^https?:\/\//.test(url)) return url;
+            try { return new URL(url, pageUrl).toString(); } catch { return null; }
+        }
+    }
+    return null;
+}
+
 function processKeyLine(line, baseUrl) { return line.replace(/URI="([^"]+)"/, (match, uri) => { const absoluteUri = resolveUrl(baseUrl, uri); logDebug(`Processing KEY URI: Original='${uri}', Absolute='${absoluteUri}'`); return `URI="${rewriteUrlToProxy(absoluteUri)}"`; }); }
 function processMapLine(line, baseUrl) { return line.replace(/URI="([^"]+)"/, (match, uri) => { const absoluteUri = resolveUrl(baseUrl, uri); logDebug(`Processing MAP URI: Original='${uri}', Absolute='${absoluteUri}'`); return `URI="${rewriteUrlToProxy(absoluteUri)}"`; }); }
 function processMediaPlaylist(url, content) {
@@ -230,8 +246,26 @@ export const handler = async (event, context) => {
                 },
                 body: processedM3u8, // Netlify expects body as string
             };
+        } else if (contentType && contentType.includes('text/html') && content.includes('<')) {
+            const realM3u8Url = extractM3u8FromHtml(content, targetUrl);
+            if (realM3u8Url) {
+                logDebug(`从HTML页面提取到m3u8地址: ${realM3u8Url}`);
+                try {
+                    const { content: m3u8Content, contentType: m3u8Type } = await fetchContentWithType(realM3u8Url, {});
+                    if (isM3u8Content(m3u8Content, m3u8Type)) {
+                        const processedM3u8 = await processM3u8Content(realM3u8Url, m3u8Content);
+                        return {
+                            statusCode: 200,
+                            headers: { ...corsHeaders, 'Content-Type': 'application/vnd.apple.mpegurl;charset=utf-8', 'Cache-Control': `public, max-age=${CACHE_TTL}` },
+                            body: processedM3u8,
+                        };
+                    }
+                } catch (e) {
+                    logDebug(`获取提取的m3u8失败: ${e.message}`);
+                }
+            }
+            logDebug(`Returning non-M3U8 content directly: ${targetUrl}, Type: ${contentType}`);
         } else {
-            // --- Return Original Content (Non-M3U8) ---
             logDebug(`Returning non-M3U8 content directly: ${targetUrl}, Type: ${contentType}`);
 
             // Prepare headers for Netlify response object

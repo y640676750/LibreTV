@@ -678,12 +678,15 @@
                                 }
                             });
 
-                            hls.loadSource(video.src);
+                            // All m3u8 URLs must go through the proxy to avoid
+                            // CORS blocking and to handle share/redirect URLs
+                            const proxiedUrl = PROXY_URL + encodeURIComponent(video.src);
+                            hls.loadSource(proxiedUrl);
                             hls.attachMedia(video);
                             
                             // enable airplay, from https://github.com/video-dev/hls.js/issues/5989
                             const source = document.createElement('source');
-                            source.src = videoUrl;
+                            source.src = proxiedUrl;
                             video.appendChild(source);
                             video.disableRemotePlayback = false;
                             
