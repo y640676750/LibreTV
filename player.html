@@ -585,22 +585,27 @@
                 maxMaxBufferLength: 60,
                 maxBufferSize: 30 * 1000 * 1000,
                 maxBufferHole: 0.5,
-                fragLoadingMaxRetry: 6,
+                fragLoadingMaxRetry: 10,
                 fragLoadingMaxRetryTimeout: 64000,
                 fragLoadingRetryDelay: 1000,
-                manifestLoadingMaxRetry: 3,
+                manifestLoadingMaxRetry: 6,
                 manifestLoadingRetryDelay: 1000,
-                levelLoadingMaxRetry: 4,
+                manifestLoadingMaxRetryTimeout: 30000,
+                levelLoadingMaxRetry: 6,
                 levelLoadingRetryDelay: 1000,
+                levelLoadingMaxRetryTimeout: 30000,
                 startLevel: -1,
                 abrEwmaDefaultEstimate: 500000,
                 abrBandWidthFactor: 0.95,
                 abrBandWidthUpFactor: 0.7,
                 abrMaxWithRealBitrate: true,
                 stretchShortVideoTrack: true,
-                appendErrorMaxRetry: 5,  // 增加尝试次数
+                appendErrorMaxRetry: 8,
                 liveSyncDurationCount: 3,
-                liveDurationInfinity: false
+                liveDurationInfinity: false,
+                xhrSetup: function(xhr, url) {
+                    xhr.timeout = 20000;
+                }
             };
             
             // 创建DPlayer实例
@@ -688,51 +693,62 @@
                                 });
                             });
                             
+                            let networkRetryCount = 0;
+                            let mediaRetryCount = 0;
+                            const MAX_NETWORK_RETRIES = 5;
+                            const MAX_MEDIA_RETRIES = 3;
+                            
                             hls.on(Hls.Events.ERROR, function(event, data) {
-                                console.log('HLS事件:', event, '数据:', data);
+                                console.log('HLS事件:', event, '详情:', data.details);
                                 
-                                // 增加错误计数
                                 errorCount++;
                                 
-                                // 处理bufferAppendError
                                 if (data.details === 'bufferAppendError') {
                                     bufferAppendErrorCount++;
-                                    console.warn(`bufferAppendError 发生 ${bufferAppendErrorCount} 次`);
-                                    
-                                    // 如果视频已经开始播放，则忽略这个错误
-                                    if (playbackStarted) {
-                                        console.log('视频已在播放中，忽略bufferAppendError');
-                                        return;
-                                    }
-                                    
-                                    // 如果出现多次bufferAppendError但视频未播放，尝试恢复
+                                    if (playbackStarted) return;
                                     if (bufferAppendErrorCount >= 3) {
                                         hls.recoverMediaError();
                                     }
+                                    return;
                                 }
                                 
-                                // 如果是致命错误，且视频未播放
-                                if (data.fatal && !playbackStarted) {
-                                    console.error('致命HLS错误:', data);
-                                    
-                                    // 尝试恢复错误
-                                    switch(data.type) {
-                                        case Hls.ErrorTypes.NETWORK_ERROR:
-                                            console.log("尝试恢复网络错误");
-                                            hls.startLoad();
-                                            break;
-                                        case Hls.ErrorTypes.MEDIA_ERROR:
-                                            console.log("尝试恢复媒体错误");
+                                if (!data.fatal) return;
+                                
+                                if (playbackStarted && data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                                    console.log("播放中网络错误，尝试恢复加载");
+                                    hls.startLoad();
+                                    return;
+                                }
+                                
+                                console.error('致命HLS错误:', data.type, data.details);
+                                
+                                switch(data.type) {
+                                    case Hls.ErrorTypes.NETWORK_ERROR:
+                                        networkRetryCount++;
+                                        if (networkRetryCount <= MAX_NETWORK_RETRIES) {
+                                            console.log(`网络错误恢复尝试 ${networkRetryCount}/${MAX_NETWORK_RETRIES}`);
+                                            setTimeout(() => hls.startLoad(), 1000 * networkRetryCount);
+                                        } else if (!errorDisplayed) {
+                                            errorDisplayed = true;
+                                            showError('视频加载失败，网络连接异常或视频源不可用');
+                                        }
+                                        break;
+                                    case Hls.ErrorTypes.MEDIA_ERROR:
+                                        mediaRetryCount++;
+                                        if (mediaRetryCount <= MAX_MEDIA_RETRIES) {
+                                            console.log(`媒体错误恢复尝试 ${mediaRetryCount}/${MAX_MEDIA_RETRIES}`);
                                             hls.recoverMediaError();
-                                            break;
-                                        default:
-                                            // 仅在多次恢复尝试后显示错误
-                                            if (errorCount > 3 && !errorDisplayed) {
-                                                errorDisplayed = true;
-                                                showError('视频加载失败，可能是格式不兼容或源不可用');
-                                            }
-                                            break;
-                                    }
+                                        } else if (!errorDisplayed) {
+                                            errorDisplayed = true;
+                                            showError('视频格式不兼容，请尝试其他视频源');
+                                        }
+                                        break;
+                                    default:
+                                        if (errorCount > 5 && !errorDisplayed) {
+                                            errorDisplayed = true;
+                                            showError('视频加载失败，请尝试其他视频源');
+                                        }
+                                        break;
                                 }
                             });
                             
@@ -872,21 +888,25 @@
                 }
             });
             
-            // 10秒后如果仍在加载，但不立即显示错误
+            // 10秒后如果仍在加载，显示提示
             setTimeout(function() {
-                // 如果视频已经播放开始，则不显示错误
-                if (dp && dp.video && dp.video.currentTime > 0) {
-                    return;
-                }
-                
+                if (dp && dp.video && dp.video.currentTime > 0) return;
                 if (document.getElementById('loading').style.display !== 'none') {
                     document.getElementById('loading').innerHTML = `
                         <div class="loading-spinner"></div>
                         <div>视频加载时间较长，请耐心等待...</div>
-                        <div style="font-size: 12px; color: #aaa; margin-top: 10px;">如长时间无响应，请尝试其他视频源</div>
+                        <div style="font-size: 12px; color: #aaa; margin-top: 10px;">如长时间无响应，请返回首页尝试其他资源站搜索</div>
                     `;
                 }
             }, 10000);
+            
+            // 25秒后如果仍在加载，显示错误
+            setTimeout(function() {
+                if (dp && dp.video && dp.video.currentTime > 0) return;
+                if (document.getElementById('loading').style.display !== 'none') {
+                    showError('视频加载超时，该视频源可能不可用，请返回首页使用其他资源站搜索');
+                }
+            }, 25000);
 
             // 绑定原生全屏：DPlayer 触发全屏时调用 requestFullscreen
             (function(){

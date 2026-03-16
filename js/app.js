@@ -1,5 +1,5 @@
 // 全局变量
-let selectedAPIs = JSON.parse(localStorage.getItem('selectedAPIs') || '["tyyszy","dyttzy", "bfzy", "ruyi"]'); // 默认选中天涯资源、暴风资源和如意资源
+let selectedAPIs = JSON.parse(localStorage.getItem('selectedAPIs') || '["bfzy","ffzy","zy360","huya","hongniu","liangzi"]');
 let customAPIs = JSON.parse(localStorage.getItem('customAPIs') || '[]'); // 存储自定义API列表
 
 // 添加当前播放的集数索引
@@ -27,8 +27,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // 设置默认API选择（如果是第一次加载）
     if (!localStorage.getItem('hasInitializedDefaults')) {
-        // 仅选择天涯资源、暴风资源和如意资源
-        selectedAPIs = ["tyyszy", "bfzy","dyttzy", "ruyi"];
+        selectedAPIs = ["bfzy", "ffzy", "zy360", "huya", "hongniu", "liangzi"];
         localStorage.setItem('selectedAPIs', JSON.stringify(selectedAPIs));
         
         // 默认选中过滤开关
@@ -609,9 +608,8 @@ async function search() {
                     apiName = API_SITES[apiId].name;
                 }
                 
-                // 添加超时处理
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 8000);
+                const timeoutId = setTimeout(() => controller.abort(), 12000);
                 
                 const response = await fetch(PROXY_URL + encodeURIComponent(apiUrl), {
                     headers: API_CONFIG.search.headers,
@@ -1094,14 +1092,3 @@ function saveStringAsFile(content, fileName) {
     window.URL.revokeObjectURL(url);
 }
 
-// app.js 或路由文件中
-const authMiddleware = require('./middleware/auth');
-const config = require('./config');
-
-// 对所有请求启用鉴权（按需调整作用范围）
-if (config.auth.enabled) {
-  app.use(authMiddleware);
-}
-
-// 或者针对特定路由
-app.use('/api', authMiddleware);

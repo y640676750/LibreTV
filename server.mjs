@@ -46,7 +46,10 @@ app.get('/proxy/:encodedUrl', async (req, res) => {
       method: 'get',
       url: targetUrl,
       responseType: 'stream',
-      timeout: 5000
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+      }
     });
 
     // 转发响应头（过滤敏感头）
