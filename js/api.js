@@ -2,7 +2,7 @@
 async function handleApiRequest(url) {
     const customApi = url.searchParams.get('customApi') || '';
     const customDetail = url.searchParams.get('customDetail') || '';
-    const source = url.searchParams.get('source') || 'heimuer';
+    const source = url.searchParams.get('source') || 'bfzy';
     
     try {
         if (url.pathname === '/api/search') {
@@ -70,18 +70,16 @@ async function handleApiRequest(url) {
         // 详情处理
         if (url.pathname === '/api/detail') {
             const id = url.searchParams.get('id');
-            const sourceCode = url.searchParams.get('source') || 'heimuer'; // 获取源代码
+            const sourceCode = url.searchParams.get('source') || 'bfzy';
             
             if (!id) {
                 throw new Error('缺少视频ID参数');
             }
             
-            // 验证ID格式 - 只允许数字和有限的特殊字符
             if (!/^[\w-]+$/.test(id)) {
                 throw new Error('无效的视频ID格式');
             }
 
-            // 验证API和source的有效性
             if (sourceCode === 'custom' && !customApi) {
                 throw new Error('使用自定义API时必须提供API地址');
             }
@@ -90,13 +88,7 @@ async function handleApiRequest(url) {
                 throw new Error('无效的API来源');
             }
 
-            // 对于有detail参数的源，都使用特殊处理方式
-            if (sourceCode !== 'custom' && API_SITES[sourceCode].detail) {
-                return await handleSpecialSourceDetail(id, sourceCode);
-            }
-            
-            // 如果是自定义API，并且传递了detail参数，尝试特殊处理
-            // 优先 customDetail
+            // For custom APIs with a detail endpoint, try HTML scraping
             if (sourceCode === 'custom' && customDetail) {
                 return await handleCustomApiSpecialDetail(id, customDetail);
             }
@@ -104,87 +96,22 @@ async function handleApiRequest(url) {
                 return await handleCustomApiSpecialDetail(id, customApi);
             }
             
-            const detailUrl = customApi
-                ? `${customApi}${API_CONFIG.detail.path}${id}`
-                : `${API_SITES[sourceCode].api}${API_CONFIG.detail.path}${id}`;
-            
-            // 添加超时处理
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 10000);
-            
-            try {
-                const response = await fetch(PROXY_URL + encodeURIComponent(detailUrl), {
-                    headers: API_CONFIG.detail.headers,
-                    signal: controller.signal
-                });
-                
-                clearTimeout(timeoutId);
-                
-                if (!response.ok) {
-                    throw new Error(`详情请求失败: ${response.status}`);
-                }
-                
-                // 解析JSON
-                const data = await response.json();
-                
-                // 检查返回的数据是否有效
-                if (!data || !data.list || !Array.isArray(data.list) || data.list.length === 0) {
-                    throw new Error('获取到的详情内容无效');
-                }
-                
-                // 获取第一个匹配的视频详情
-                const videoDetail = data.list[0];
-                
-                // 提取播放地址
-                let episodes = [];
-                
-                if (videoDetail.vod_play_url) {
-                    // 分割不同播放源
-                    const playSources = videoDetail.vod_play_url.split('$$$');
-                    
-                    // 提取第一个播放源的集数（通常为主要源）
-                    if (playSources.length > 0) {
-                        const mainSource = playSources[0];
-                        const episodeList = mainSource.split('#');
-                        
-                        // 从每个集数中提取URL
-                        episodes = episodeList.map(ep => {
-                            const parts = ep.split('$');
-                            // 返回URL部分(通常是第二部分，如果有的话)
-                            return parts.length > 1 ? parts[1] : '';
-                        }).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
-                    }
-                }
-                
-                // 如果没有找到播放地址，尝试使用正则表达式查找m3u8链接
-                if (episodes.length === 0 && videoDetail.vod_content) {
-                    const matches = videoDetail.vod_content.match(M3U8_PATTERN) || [];
-                    episodes = matches.map(link => link.replace(/^\$/, ''));
-                }
-                
-                return JSON.stringify({
-                    code: 200,
-                    episodes: episodes,
-                    detailUrl: detailUrl,
-                    videoInfo: {
-                        title: videoDetail.vod_name,
-                        cover: videoDetail.vod_pic,
-                        desc: videoDetail.vod_content,
-                        type: videoDetail.type_name,
-                        year: videoDetail.vod_year,
-                        area: videoDetail.vod_area,
-                        director: videoDetail.vod_director,
-                        actor: videoDetail.vod_actor,
-                        remarks: videoDetail.vod_remarks,
-                        // 添加源信息
-                        source_name: sourceCode === 'custom' ? '自定义源' : API_SITES[sourceCode].name,
-                        source_code: sourceCode
-                    }
-                });
-            } catch (fetchError) {
-                clearTimeout(timeoutId);
-                throw fetchError;
+            // Always try the standard API endpoint first (most reliable)
+            const apiResult = await fetchDetailFromApi(id, sourceCode, customApi);
+            if (apiResult) {
+                return apiResult;
             }
+            
+            // Fallback: try HTML scraping for sources with a detail property
+            if (sourceCode !== 'custom' && API_SITES[sourceCode].detail) {
+                try {
+                    return await handleSpecialSourceDetail(id, sourceCode);
+                } catch (e) {
+                    console.warn(`HTML scraping fallback failed for ${sourceCode}:`, e);
+                }
+            }
+            
+            throw new Error('无法获取视频详情');
         }
 
         throw new Error('未知的API路径');
@@ -196,6 +123,97 @@ async function handleApiRequest(url) {
             list: [],
             episodes: [],
         });
+    }
+}
+
+// Extract episodes from vod_play_url, preferring m3u8 sources
+function extractEpisodesFromPlayUrl(vodPlayUrl) {
+    if (!vodPlayUrl) return [];
+    
+    const playSources = vodPlayUrl.split('$$$');
+    
+    // Try each play source, prefer ones with m3u8 links
+    let bestEpisodes = [];
+    
+    for (const source of playSources) {
+        const episodeList = source.split('#');
+        const episodes = episodeList.map(ep => {
+            const parts = ep.split('$');
+            return parts.length > 1 ? parts[parts.length - 1].trim() : '';
+        }).filter(url => url && (url.startsWith('http://') || url.startsWith('https://')));
+        
+        if (episodes.length === 0) continue;
+        
+        const hasM3u8 = episodes.some(url => url.includes('.m3u8'));
+        if (hasM3u8) {
+            return episodes;
+        }
+        
+        if (episodes.length > bestEpisodes.length) {
+            bestEpisodes = episodes;
+        }
+    }
+    
+    return bestEpisodes;
+}
+
+// Fetch detail from the standard API endpoint
+async function fetchDetailFromApi(id, sourceCode, customApi) {
+    try {
+        const detailUrl = customApi
+            ? `${customApi}${API_CONFIG.detail.path}${id}`
+            : `${API_SITES[sourceCode].api}${API_CONFIG.detail.path}${id}`;
+        
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 12000);
+        
+        const response = await fetch(PROXY_URL + encodeURIComponent(detailUrl), {
+            headers: API_CONFIG.detail.headers,
+            signal: controller.signal
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) return null;
+        
+        const data = await response.json();
+        
+        if (!data || !data.list || !Array.isArray(data.list) || data.list.length === 0) {
+            return null;
+        }
+        
+        const videoDetail = data.list[0];
+        
+        let episodes = extractEpisodesFromPlayUrl(videoDetail.vod_play_url);
+        
+        if (episodes.length === 0 && videoDetail.vod_content) {
+            const matches = videoDetail.vod_content.match(M3U8_PATTERN) || [];
+            episodes = matches.map(link => link.replace(/^\$/, ''));
+        }
+        
+        if (episodes.length === 0) return null;
+        
+        return JSON.stringify({
+            code: 200,
+            episodes: episodes,
+            detailUrl: detailUrl,
+            videoInfo: {
+                title: videoDetail.vod_name,
+                cover: videoDetail.vod_pic,
+                desc: videoDetail.vod_content,
+                type: videoDetail.type_name,
+                year: videoDetail.vod_year,
+                area: videoDetail.vod_area,
+                director: videoDetail.vod_director,
+                actor: videoDetail.vod_actor,
+                remarks: videoDetail.vod_remarks,
+                source_name: sourceCode === 'custom' ? '自定义源' : API_SITES[sourceCode].name,
+                source_code: sourceCode
+            }
+        });
+    } catch (e) {
+        console.warn('Standard API detail fetch failed:', e);
+        return null;
     }
 }
 
