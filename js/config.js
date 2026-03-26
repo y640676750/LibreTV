@@ -21,10 +21,6 @@ const SITE_CONFIG = {
 
 // API站点配置
 const API_SITES = {
-    bfzy: {
-        api: 'https://bfzyapi.com',
-        name: '暴风资源',
-    },
     ffzy: {
         api: 'https://api.ffzyapi.com',
         name: '非凡影视',

@@ -1,8 +1,11 @@
 import path from 'path';
 import express from 'express';
 import axios from 'axios';
+import https from 'https';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
+
+const httpsAgent = new https.Agent({ rejectUnauthorized: false });
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -73,19 +76,31 @@ function processM3u8(targetUrl, content) {
 
 // Extract real m3u8 URL from HTML share/player pages
 function extractM3u8FromHtml(html, pageUrl) {
-  const patterns = [
-    /(?:url|source|video_url|playUrl)\s*[:=]\s*["']([^"']*\.m3u8[^"']*)/i,
-    /(?:url|source|video_url|playUrl)\s*[:=]\s*["'](\/[^"']+)/i,
+  // First try: look for .m3u8 URLs anywhere in the HTML
+  const m3u8Patterns = [
+    /["'](https?:\/\/[^"'\s]+\.m3u8[^"'\s]*)/i,
+    /["'](\/[^"'\s]+\.m3u8[^"'\s]*)/i,
   ];
-  for (const pattern of patterns) {
+  for (const pattern of m3u8Patterns) {
     const match = html.match(pattern);
     if (match && match[1]) {
       const url = match[1];
       if (/^https?:\/\//.test(url)) return url;
-      try {
-        return new URL(url, pageUrl).toString();
-      } catch {
-        return null;
+      try { return new URL(url, pageUrl).toString(); } catch { /* continue */ }
+    }
+  }
+
+  // Second try: look for url/source variable assignments
+  const varPatterns = [
+    /(?:url|source|video_url|playUrl)\s*[:=]\s*["']([^"']+)/i,
+  ];
+  for (const pattern of varPatterns) {
+    const match = html.match(pattern);
+    if (match && match[1]) {
+      const url = match[1];
+      if (/^https?:\/\//.test(url)) return url;
+      if (url.startsWith('/')) {
+        try { return new URL(url, pageUrl).toString(); } catch { /* continue */ }
       }
     }
   }
@@ -117,6 +132,7 @@ app.get('/proxy/:encodedUrl', async (req, res) => {
         'Referer': new URL(targetUrl).origin + '/',
       },
       maxRedirects: 5,
+      httpsAgent,
     });
 
     const contentType = response.headers['content-type'] || '';
@@ -144,6 +160,7 @@ app.get('/proxy/:encodedUrl', async (req, res) => {
               'Referer': new URL(realM3u8Url).origin + '/',
             },
             maxRedirects: 5,
+            httpsAgent,
           });
           const m3u8Content = Buffer.from(m3u8Response.data).toString('utf-8');
           if (isM3u8Content(m3u8Content, m3u8Response.headers['content-type'] || '')) {

@@ -208,21 +208,29 @@ export async function onRequest(context) {
         }
     }
 
-    // Extract real m3u8 URL from HTML share/player pages
     function extractM3u8FromHtml(html, pageUrl) {
-        const patterns = [
-            /(?:url|source|video_url|playUrl)\s*[:=]\s*["']([^"']*\.m3u8[^"']*)/i,
-            /(?:url|source|video_url|playUrl)\s*[:=]\s*["'](\/[^"']+)/i,
+        const m3u8Patterns = [
+            /["'](https?:\/\/[^"'\s]+\.m3u8[^"'\s]*)/i,
+            /["'](\/[^"'\s]+\.m3u8[^"'\s]*)/i,
         ];
-        for (const pattern of patterns) {
+        for (const pattern of m3u8Patterns) {
             const match = html.match(pattern);
             if (match && match[1]) {
                 const url = match[1];
                 if (/^https?:\/\//.test(url)) return url;
-                try {
-                    return new URL(url, pageUrl).toString();
-                } catch {
-                    return null;
+                try { return new URL(url, pageUrl).toString(); } catch { /* continue */ }
+            }
+        }
+        const varPatterns = [
+            /(?:url|source|video_url|playUrl)\s*[:=]\s*["']([^"']+)/i,
+        ];
+        for (const pattern of varPatterns) {
+            const match = html.match(pattern);
+            if (match && match[1]) {
+                const url = match[1];
+                if (/^https?:\/\//.test(url)) return url;
+                if (url.startsWith('/')) {
+                    try { return new URL(url, pageUrl).toString(); } catch { /* continue */ }
                 }
             }
         }
